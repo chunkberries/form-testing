@@ -112,180 +112,204 @@
     </div>
 
     <script>
-        const fetchFormBtn = document.getElementById('fetch-form-btn');
-        const submitAllBtn = document.getElementById('submit-all-btn');
-        const formLinkInput = document.getElementById('form-link');
-        const submissionCountInput = document.getElementById('submission-count');
-        const formFieldsContainer = document.getElementById('form-fields-container');
-        const responseLog = document.getElementById('response-log');
+      const fetchFormBtn = document.getElementById('fetch-form-btn');
+      const submitAllBtn = document.getElementById('submit-all-btn');
+      const formLinkInput = document.getElementById('form-link');
+      const submissionCountInput = document.getElementById('submission-count');
+      const formFieldsContainer = document.getElementById('form-fields-container');
+      const responseLog = document.getElementById('response-log');
 
-        let formActionUrl = '';
-        let formFields = [];
+      let formActionUrl = '';
+      let formFields = [];
+      let formBaseUrl = '';
 
-        function logMessage(message, isError = false) {
-            const timestamp = new Date().toLocaleTimeString();
-            responseLog.textContent += `[${timestamp}] ${message}\n`;
-            responseLog.scrollTop = responseLog.scrollHeight;
-            if (isError) {
-                console.error(message);
-            }
-        }
+      function logMessage(message, isError = false) {
+          const timestamp = new Date().toLocaleTimeString();
+          responseLog.textContent += `[${timestamp}] ${message}\n`;
+          responseLog.scrollTop = responseLog.scrollHeight;
+          if (isError) {
+              console.error(message);
+          }
+      }
 
-        function extractFormId(url) {
-            const regex = /\/forms\/d\/e\/([a-zA-Z0-9_-]+)/;
-            const match = url.match(regex);
-            return match ? match[1] : null;
-        }
+      function extractFormId(url) {
+          const regex = /\/forms\/d\/e\/([a-zA-Z0-9_-]+)/;
+          const match = url.match(regex);
+          return match ? match[1] : null;
+      }
 
-        async function fetchForm() {
-            const formUrl = formLinkInput.value;
-            const formId = extractFormId(formUrl);
+      async function fetchForm() {
+          const formUrl = formLinkInput.value.trim();
+          if (!formUrl) {
+              logMessage('Error: Please enter a Google Form URL.', true);
+              return;
+      }
 
-            if (!formId) {
-                logMessage('Error: Invalid Google Form URL. Please check and try again.', true);
-                return;
-            }
+      const formId = extractFormId(formUrl);
+      if (!formId) {
+          logMessage('Error: Invalid Google Form URL. Please check and try again.', true);
+          return;
+      }
 
-            logMessage(`Fetching form with ID: \${formId}...`);
-            fetchFormBtn.disabled = true;
-            fetchFormBtn.textContent = 'Fetching...';
+      logMessage(`Fetching form with ID: ${formId}...`);
+      fetchFormBtn.disabled = true;
+      fetchFormBtn.textContent = 'Fetching...';
 
-            try {
-                // Fetch the form's HTML to parse its structure
-                const response = await fetch(formUrl);
-                if (!response.ok) {
-                    throw new Error(`Failed to fetch form. Status: \${response.status}`);
-                }
-                const htmlText = await response.text();
-                const parser = new DOMParser();
-                const doc = parser.parseFromString(htmlText, 'text/html');
+      try {
+          // Fetch the form's HTML
+          const response = await fetch(formUrl);
+          if (!response.ok) {
+              throw new Error(`Failed to fetch form. Status: ${response.status}`);
+          }
+          const htmlText = await response.text();
+          const parser = new DOMParser();
+          const doc = parser.parseFromString(htmlText, 'text/html');
 
-                // Find the form action URL
-                const formElement = doc.querySelector('form');
-                if (!formElement) {
-                    throw new Error('Could not find the form element in the page.');
-                }
-                formActionUrl = formElement.action;
-                logMessage(`Form action URL found: ${formActionUrl}`);
+          // Find the form element
+          const formElement = doc.querySelector('form');
+          if (!formElement) {
+              throw new Error('Could not find the form element in the page.');
+          }
 
-                // Find all input fields and textareas
-                formFields = Array.from(doc.querySelectorAll('input[data-item-id], textarea[data-item-id]')).map(el => {
-                    return {
-                        id: el.getAttribute('data-item-id'),
-                        name: el.name,
-                        type: el.type,
-                        label: doc.querySelector(`label[for="${el.id}"]`)?.innerText || `Field (${el.name})`
-                    };
-                });
+          // Get the form action URL
+          let actionUrl = formElement.action;
+          if (!actionUrl.startsWith('http')) {
+              // If relative, construct absolute URL
+              const baseUrl = new URL(formUrl);
+              actionUrl = new URL(actionUrl, baseUrl).href;
+          }
+          formActionUrl = actionUrl;
+          logMessage(`Form action URL: ${formActionUrl}`);
 
-                if (formFields.length === 0) {
-                    logMessage('Warning: No submittable fields found. The form might be empty or use unsupported field types.', true);
-                } else {
-                    logMessage(`Found ${formFields.length} fields.`);
-                }
-                
-                renderFormFields();
-                submitAllBtn.disabled = false;
+          // Save base URL for relative paths
+          formBaseUrl = new URL(formUrl).origin;
 
-            } catch (error) {
-                logMessage(`Error: ${error.message}`, true);
-                formFieldsContainer.innerHTML = '';
-                submitAllBtn.disabled = true;
-            } finally {
-                fetchFormBtn.disabled = false;
-                fetchFormBtn.textContent = 'Fetch Form Fields';
-            }
-        }
+          // Find all input and textarea elements
+          const inputs = Array.from(formElement.querySelectorAll('input, textarea'));
 
-        function renderFormFields() {
-            formFieldsContainer.innerHTML = '<h2>Form Fields (Enter values to submit)</h2>';
-            if (formFields.length === 0) {
-                formFieldsContainer.innerHTML += '<p>No fields to configure.</p>';
-                return;
-            }
+          formFields = inputs.map(el => {
+              return {
+                  name: el.name,
+                  type: el.type,
+                  label: getLabelText(el, doc)
+              };
+          }).filter(field => field.name); // Filter out elements without name
 
-            formFields.forEach(field => {
-                const fieldGroup = document.createElement('div');
-                fieldGroup.className = 'field-group';
+          if (formFields.length === 0) {
+              logMessage('Warning: No submittable fields found. The form might be empty or use unsupported field types.', true);
+          } else {
+              logMessage(`Found ${formFields.length} fields.`);
+          }
 
-                const label = document.createElement('label');
-                label.htmlFor = `input-${field.id}`;
-                label.textContent = `${field.label} (${field.type})`;
-                fieldGroup.appendChild(label);
+          renderFormFields();
+          submitAllBtn.disabled = false;
 
-                let input;
-                if (field.type === 'TEXTAREA' || field.type.includes('text')) {
-                    input = document.createElement('textarea');
-                } else {
-                    input = document.createElement('input');
-                    input.type = 'text'; // Use text input for simplicity, can be expanded
-                }
-                
-                input.id = `input-${field.id}`;
-                input.placeholder = `Enter value for ${field.label}`;
-                input.dataset.fieldName = field.name;
-                
-                fieldGroup.appendChild(input);
-                formFieldsContainer.appendChild(fieldGroup);
-            });
-        }
+      } catch (error) {
+          logMessage(`Error: ${error.message}`, true);
+          formFieldsContainer.innerHTML = '';
+          submitAllBtn.disabled = true;
+      } finally {
+          fetchFormBtn.disabled = false;
+          fetchFormBtn.textContent = 'Fetch Form Fields';
+      }
+  }
 
-            async function submitAll() {
-                const count = parseInt(submissionCountInput.value, 10);
-                if (isNaN(count) || count < 1) {
-                logMessage('Error: Please enter a valid number of submissions (at least 1).', true);
-                return;
-            }
+  function getLabelText(element, document) {
+      // Try to find a label associated with the input
+      const id = element.id;
+      if (id) {
+          const label = document.querySelector(`label[for="${id}"]`);
+          if (label) return label.innerText;
+      }
+      // If not found, check parent label
+      const parentLabel = element.closest('label');
+      if (parentLabel) return parentLabel.innerText;
+      // Fallback: use placeholder or default text
+      return element.placeholder || 'Field';
+  }
 
-            if (!formActionUrl || formFields.length === 0) {
-                logMessage('Error: No form action URL or fields found. Please fetch the form first.', true);
-                return;
-            }
+  function renderFormFields() {
+      formFieldsContainer.innerHTML = '<h2>Form Fields (Enter values to submit)</h2>';
+      if (formFields.length === 0) {
+          formFieldsContainer.innerHTML += '<p>No fields to configure.</p>';
+          return;
+      }
 
-            submitAllBtn.disabled = true;
-            logMessage(`Starting to submit ${count} response(s)...`);
+      formFields.forEach(field => {
+          const fieldGroup = document.createElement('div');
+          fieldGroup.className = 'field-group';
 
-            for (let i = 1; i <= count; i++) {
-                logMessage(`Submitting response ${i} of ${count}...`);
-                try {
-                    // Gather input values
-                    const formData = new URLSearchParams();
+          const label = document.createElement('label');
+          label.htmlFor = `input-${field.name}`;
+          label.textContent = `${field.label} (${field.type})`;
+          fieldGroup.appendChild(label);
 
-                    formFields.forEach(field => {
-                        const inputElement = document.getElementById(`input-${field.id}`);
-                        let value = inputElement.value.trim();
-                        if (value === '') {
-                            value = 'N/A'; // or handle differently if needed
-                        }
-                        formData.append(field.name, value);
-                    });
+          const input = document.createElement('input');
+          input.type = 'text'; // default to text for simplicity
+          input.id = `input-${field.name}`;
+          input.placeholder = `Enter value for ${field.label}`;
+          input.dataset.fieldName = field.name;
 
-                    // Send POST request
-                    const response = await fetch(formActionUrl, {
-                        method: 'POST',
-                        body: formData,
-                        headers: {
-                            'Content-Type': 'application/x-www-form-urlencoded'
-                        }
-                    });
+          fieldGroup.appendChild(input);
+          formFieldsContainer.appendChild(fieldGroup);
+      });
+  }
 
-                    if (response.ok) {
-                        logMessage(`Response ${i} submitted successfully.`);
-                    } else {
-                        logMessage(`Response ${i} failed to submit. Status: ${response.status}`, true);
-                    }
-                } catch (error) {
-                    logMessage(`Error submitting response ${i}: ${error.message}`, true);
-                }
-            }
+  async function submitAll() {
+      const count = parseInt(submissionCountInput.value, 10);
+      if (isNaN(count) || count < 1) {
+          logMessage('Error: Please enter a valid number of submissions (at least 1).', true);
+          return;
+      }
 
-            logMessage('All submissions completed.');
-            submitAllBtn.disabled = false;
-        }
+      if (!formActionUrl || formFields.length === 0) {
+          logMessage('Error: No form action URL or fields found. Please fetch the form first.', true);
+          return;
+      }
 
-        // Event Listeners
-        fetchFormBtn.addEventListener('click', fetchForm);
-        document.getElementById('submit-all-btn').addEventListener('click', submitAll);
-    </script>
+      submitAllBtn.disabled = true;
+      logMessage(`Starting to submit ${count} response(s)...`);
+
+      for (let i = 1; i <= count; i++) {
+          logMessage(`Submitting response ${i} of ${count}...`);
+          try {
+              const formData = new URLSearchParams();
+
+              formFields.forEach(field => {
+                  const inputElement = document.getElementById(`input-${field.name}`);
+                  let value = inputElement.value.trim();
+                  if (value === '') {
+                      value = 'N/A';
+                  }
+                  formData.append(field.name, value);
+              });
+
+              const response = await fetch(formActionUrl, {
+                  method: 'POST',
+                  body: formData,
+                  headers: {
+                      'Content-Type': 'application/x-www-form-urlencoded'
+                  }
+              });
+
+              if (response.ok) {
+                  logMessage(`Response ${i} submitted successfully.`);
+              } else {
+                  logMessage(`Response ${i} failed to submit. Status: ${response.status}`, true);
+              }
+          } catch (error) {
+              logMessage(`Error submitting response ${i}: ${error.message}`, true);
+          }
+      }
+
+      logMessage('All submissions completed.');
+      submitAllBtn.disabled = false;
+  }
+
+  fetchFormBtn.addEventListener('click', fetchForm);
+  document.getElementById('submit-all-btn').addEventListener('click', submitAll);
+</script>
+
+
 </body>
 </html>
