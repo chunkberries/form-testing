@@ -1,0 +1,291 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Google Form Submitter</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            line-height: 1.6;
+            margin: 0;
+            padding: 20px;
+            background-color: #f4f4f9;
+            color: #333;
+        }
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+            background-color: #fff;
+            padding: 25px;
+            border-radius: 8px;
+            box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+        }
+        h1, h2 {
+            color: #2c3e50;
+            border-bottom: 2px solid #3498db;
+            padding-bottom: 10px;
+        }
+        input[type="text"], input[type="number"], input[type="url"], textarea {
+            width: 100%;
+            padding: 10px;
+            margin-bottom: 15px;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+            box-sizing: border-box;
+        }
+        button {
+            background-color: #3498db;
+            color: white;
+            padding: 12px 20px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 16px;
+            transition: background-color 0.3s;
+        }
+        button:hover {
+            background-color: #2980b9;
+        }
+        button:disabled {
+            background-color: #bdc3c7;
+            cursor: not-allowed;
+        }
+        #form-fields-container {
+            margin-top: 20px;
+        }
+        .field-group {
+            background-color: #ecf0f1;
+            padding: 15px;
+            margin-bottom: 15px;
+            border-radius: 5px;
+            border-left: 5px solid #3498db;
+        }
+        .field-group label {
+            font-weight: bold;
+            display: block;
+            margin-bottom: 5px;
+        }
+        .field-group input, .field-group textarea {
+            margin-bottom: 10px;
+        }
+        .response-log {
+            margin-top: 20px;
+            height: 150px;
+            overflow-y: scroll;
+            background-color: #2c3e50;
+            color: #1abc9c;
+            padding: 10px;
+            border-radius: 4px;
+            font-family: monospace;
+            white-space: pre-wrap;
+        }
+        .error {
+            color: #e74c3c;
+            font-weight: bold;
+        }
+    </style>
+</head>
+<body>
+
+    <div class="container">
+        <h1>Google Form Submitter</h1>
+        <p>This tool fetches the fields from a public Google Form and allows you to submit multiple responses with custom values.</p>
+
+        <div>
+            <label for="form-link">Google Form Link:</label>
+            <input type="url" id="form-link" placeholder="https://docs.google.com/forms/d/e/[FORM_ID]/viewform">
+        </div>
+
+        <div>
+            <label for="submission-count">Number of Submissions:</label>
+            <input type="number" id="submission-count" value="1" min="1">
+        </div>
+
+        <button id="fetch-form-btn">Fetch Form Fields</button>
+        <button id="submit-all-btn" disabled>Submit All</button>
+
+        <div id="form-fields-container"></div>
+
+        <h2>Response Log</h2>
+        <div id="response-log" class="response-log">Log will appear here...</div>
+    </div>
+
+    <script>
+        const fetchFormBtn = document.getElementById('fetch-form-btn');
+        const submitAllBtn = document.getElementById('submit-all-btn');
+        const formLinkInput = document.getElementById('form-link');
+        const submissionCountInput = document.getElementById('submission-count');
+        const formFieldsContainer = document.getElementById('form-fields-container');
+        const responseLog = document.getElementById('response-log');
+
+        let formActionUrl = '';
+        let formFields = [];
+
+        function logMessage(message, isError = false) {
+            const timestamp = new Date().toLocaleTimeString();
+            responseLog.textContent += `[${timestamp}] ${message}\n`;
+            responseLog.scrollTop = responseLog.scrollHeight;
+            if (isError) {
+                console.error(message);
+            }
+        }
+
+        function extractFormId(url) {
+            const regex = /\/forms\/d\/e\/([a-zA-Z0-9_-]+)/;
+            const match = url.match(regex);
+            return match ? match[1] : null;
+        }
+
+        async function fetchForm() {
+            const formUrl = formLinkInput.value;
+            const formId = extractFormId(formUrl);
+
+            if (!formId) {
+                logMessage('Error: Invalid Google Form URL. Please check and try again.', true);
+                return;
+            }
+
+            logMessage(`Fetching form with ID: \${formId}...`);
+            fetchFormBtn.disabled = true;
+            fetchFormBtn.textContent = 'Fetching...';
+
+            try {
+                // Fetch the form's HTML to parse its structure
+                const response = await fetch(formUrl);
+                if (!response.ok) {
+                    throw new Error(`Failed to fetch form. Status: \${response.status}`);
+                }
+                const htmlText = await response.text();
+                const parser = new DOMParser();
+                const doc = parser.parseFromString(htmlText, 'text/html');
+
+                // Find the form action URL
+                const formElement = doc.querySelector('form');
+                if (!formElement) {
+                    throw new Error('Could not find the form element in the page.');
+                }
+                formActionUrl = formElement.action;
+                logMessage(`Form action URL found: ${formActionUrl}`);
+
+                // Find all input fields and textareas
+                formFields = Array.from(doc.querySelectorAll('input[data-item-id], textarea[data-item-id]')).map(el => {
+                    return {
+                        id: el.getAttribute('data-item-id'),
+                        name: el.name,
+                        type: el.type,
+                        label: doc.querySelector(`label[for="${el.id}"]`)?.innerText || `Field (${el.name})`
+                    };
+                });
+
+                if (formFields.length === 0) {
+                    logMessage('Warning: No submittable fields found. The form might be empty or use unsupported field types.', true);
+                } else {
+                    logMessage(`Found ${formFields.length} fields.`);
+                }
+                
+                renderFormFields();
+                submitAllBtn.disabled = false;
+
+            } catch (error) {
+                logMessage(`Error: ${error.message}`, true);
+                formFieldsContainer.innerHTML = '';
+                submitAllBtn.disabled = true;
+            } finally {
+                fetchFormBtn.disabled = false;
+                fetchFormBtn.textContent = 'Fetch Form Fields';
+            }
+        }
+
+        function renderFormFields() {
+            formFieldsContainer.innerHTML = '<h2>Form Fields (Enter values to submit)</h2>';
+            if (formFields.length === 0) {
+                formFieldsContainer.innerHTML += '<p>No fields to configure.</p>';
+                return;
+            }
+
+            formFields.forEach(field => {
+                const fieldGroup = document.createElement('div');
+                fieldGroup.className = 'field-group';
+
+                const label = document.createElement('label');
+                label.htmlFor = `input-${field.id}`;
+                label.textContent = `${field.label} (${field.type})`;
+                fieldGroup.appendChild(label);
+
+                let input;
+                if (field.type === 'TEXTAREA' || field.type.includes('text')) {
+                    input = document.createElement('textarea');
+                } else {
+                    input = document.createElement('input');
+                    input.type = 'text'; // Use text input for simplicity, can be expanded
+                }
+                
+                input.id = `input-${field.id}`;
+                input.placeholder = `Enter value for ${field.label}`;
+                input.dataset.fieldName = field.name;
+                
+                fieldGroup.appendChild(input);
+                formFieldsContainer.appendChild(fieldGroup);
+            });
+        }
+
+            async function submitAll() {
+                const count = parseInt(submissionCountInput.value, 10);
+                if (isNaN(count) || count < 1) {
+                logMessage('Error: Please enter a valid number of submissions (at least 1).', true);
+                return;
+            }
+
+            if (!formActionUrl || formFields.length === 0) {
+                logMessage('Error: No form action URL or fields found. Please fetch the form first.', true);
+                return;
+            }
+
+            submitAllBtn.disabled = true;
+            logMessage(`Starting to submit ${count} response(s)...`);
+
+            for (let i = 1; i <= count; i++) {
+                logMessage(`Submitting response ${i} of ${count}...`);
+                try {
+                    // Gather input values
+                    const formData = new URLSearchParams();
+
+                    formFields.forEach(field => {
+                        const inputElement = document.getElementById(`input-${field.id}`);
+                        let value = inputElement.value.trim();
+                        if (value === '') {
+                            value = 'N/A'; // or handle differently if needed
+                        }
+                        formData.append(field.name, value);
+                    });
+
+                    // Send POST request
+                    const response = await fetch(formActionUrl, {
+                        method: 'POST',
+                        body: formData,
+                        headers: {
+                            'Content-Type': 'application/x-www-form-urlencoded'
+                        }
+                    });
+
+                    if (response.ok) {
+                        logMessage(`Response ${i} submitted successfully.`);
+                    } else {
+                        logMessage(`Response ${i} failed to submit. Status: ${response.status}`, true);
+                    }
+                } catch (error) {
+                    logMessage(`Error submitting response ${i}: ${error.message}`, true);
+                }
+            }
+
+            logMessage('All submissions completed.');
+            submitAllBtn.disabled = false;
+        }
+
+        // Event Listeners
+        fetchFormBtn.addEventListener('click', fetchForm);
+        document.getElementById('submit-all-btn').addEventListener('click', submitAll);
+    </script>
+</body>
+</html>
